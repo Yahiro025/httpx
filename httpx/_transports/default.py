@@ -26,6 +26,7 @@ client = httpx.Client(transport=transport)
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import typing
 from types import TracebackType
@@ -90,6 +91,19 @@ def _load_httpcore_exceptions() -> dict[type[Exception], type[httpx.HTTPError]]:
         httpcore.LocalProtocolError: LocalProtocolError,
         httpcore.RemoteProtocolError: RemoteProtocolError,
     }
+
+
+async def _wait_for_asyncio_task(task: asyncio.Future[typing.Any]) -> None:
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+
+    try:
+        task.result()
+    except BaseException:
+        pass
 
 
 @contextlib.contextmanager
@@ -268,8 +282,24 @@ class AsyncResponseStream(AsyncByteStream):
 
     async def __aiter__(self) -> typing.AsyncIterator[bytes]:
         with map_httpcore_exceptions():
-            async for part in self._httpcore_stream:
-                yield part
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                async for part in self._httpcore_stream:
+                    yield part
+            else:
+                iterator = self._httpcore_stream.__aiter__()
+                while True:
+                    task = asyncio.ensure_future(iterator.__anext__())
+                    try:
+                        part = await asyncio.shield(task)
+                    except StopAsyncIteration:
+                        break
+                    except BaseException:
+                        task.cancel()
+                        await _wait_for_asyncio_task(task)
+                        raise
+                    yield part
 
     async def aclose(self) -> None:
         if hasattr(self._httpcore_stream, "aclose"):
