@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import typing
 from datetime import timedelta
 
 import pytest
+import sniffio
 
 import httpx
 
@@ -76,6 +78,46 @@ async def test_stream_response(server):
     assert response.status_code == 200
     assert body == b"Hello, world!"
     assert response.content == b"Hello, world!"
+
+
+@pytest.mark.anyio
+async def test_double_cancellation_does_not_leak_stream_connection(server):
+    if sniffio.current_async_library() != "asyncio":
+        pytest.skip("asyncio task cancellation is required to reproduce this issue")
+
+    timeout = httpx.Timeout(5.0, pool=0.1)
+    limits = httpx.Limits(max_connections=1)
+    async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
+
+        async def stream() -> typing.AsyncIterator[str]:
+            async with client.stream("GET", server.url.copy_with(path="/stream")) as response:
+                try:
+                    async for line in response.aiter_lines():
+                        yield line
+                finally:
+                    await asyncio.shield(response.aclose())
+
+        async def consume(stop_signal: asyncio.Event) -> None:
+            iterator = stream()
+            try:
+                async for _ in iterator:
+                    stop_signal.set()
+            finally:
+                await asyncio.shield(iterator.aclose())
+
+        for _ in range(2):
+            stop_signal = asyncio.Event()
+            task = asyncio.create_task(consume(stop_signal))
+            await stop_signal.wait()
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+            response = await client.get(server.url)
+            assert response.status_code == 200
 
 
 @pytest.mark.anyio
