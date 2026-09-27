@@ -93,13 +93,16 @@ def _load_httpcore_exceptions() -> dict[type[Exception], type[httpx.HTTPError]]:
     }
 
 
-async def _wait_for_asyncio_task(task: asyncio.Future[typing.Any]) -> bool:
-    cancelled = False
+async def _wait_for_asyncio_task(
+    task: asyncio.Future[typing.Any],
+) -> asyncio.CancelledError | None:
+    cancelled: asyncio.CancelledError | None = None
     while not task.done():
         try:
             await asyncio.shield(task)
-        except asyncio.CancelledError:
-            cancelled = True
+        except asyncio.CancelledError as exc:
+            if cancelled is None:
+                cancelled = exc
 
     try:
         task.result()
@@ -312,8 +315,8 @@ class AsyncResponseStream(AsyncByteStream):
             else:
                 task = asyncio.ensure_future(self._httpcore_stream.aclose())
                 cancelled = await _wait_for_asyncio_task(task)
-                if cancelled:
-                    raise asyncio.CancelledError
+                if cancelled is not None:
+                    raise cancelled
                 task.result()
 
 

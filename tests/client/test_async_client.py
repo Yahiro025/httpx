@@ -127,12 +127,13 @@ async def test_double_cancellation_does_not_leak_stream_connection(server):
         )
         close_task = asyncio.create_task(response.aclose())
         await asyncio.sleep(0)
-        close_task.cancel()
+        close_task.cancel("shutdown")
         await asyncio.sleep(0)
-        close_task.cancel()
+        close_task.cancel("shutdown again")
 
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError) as exc_info:
             await close_task
+        assert exc_info.value.args == ("shutdown",)
 
         response = await client.get(server.url)
         assert response.status_code == 200
