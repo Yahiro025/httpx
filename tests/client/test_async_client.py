@@ -121,6 +121,24 @@ async def test_double_cancellation_does_not_leak_stream_connection(server):
             response = await client.get(server.url)
             assert response.status_code == 200
 
+        response = await client.send(
+            client.build_request(
+                "GET", server.url.copy_with(path="/stream")
+            ),
+            stream=True,
+        )
+        close_task = asyncio.create_task(response.aclose())
+        await asyncio.sleep(0)
+        close_task.cancel()
+        await asyncio.sleep(0)
+        close_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await close_task
+
+        response = await client.get(server.url)
+        assert response.status_code == 200
+
 
 @pytest.mark.anyio
 async def test_access_content_stream_response(server):

@@ -93,17 +93,19 @@ def _load_httpcore_exceptions() -> dict[type[Exception], type[httpx.HTTPError]]:
     }
 
 
-async def _wait_for_asyncio_task(task: asyncio.Future[typing.Any]) -> None:
+async def _wait_for_asyncio_task(task: asyncio.Future[typing.Any]) -> bool:
+    cancelled = False
     while not task.done():
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError:
-            continue
+            cancelled = True
 
     try:
         task.result()
     except BaseException:
         pass
+    return cancelled
 
 
 @contextlib.contextmanager
@@ -303,7 +305,16 @@ class AsyncResponseStream(AsyncByteStream):
 
     async def aclose(self) -> None:
         if hasattr(self._httpcore_stream, "aclose"):
-            await self._httpcore_stream.aclose()
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                await self._httpcore_stream.aclose()
+            else:
+                task = asyncio.ensure_future(self._httpcore_stream.aclose())
+                cancelled = await _wait_for_asyncio_task(task)
+                if cancelled:
+                    raise asyncio.CancelledError
+                task.result()
 
 
 class AsyncHTTPTransport(AsyncBaseTransport):
