@@ -89,8 +89,10 @@ async def test_double_cancellation_does_not_leak_stream_connection(server):
     limits = httpx.Limits(max_connections=1)
     async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
 
-        async def stream() -> typing.AsyncIterator[str]:
-            async with client.stream("GET", server.url.copy_with(path="/stream")) as response:
+        async def stream() -> typing.AsyncGenerator[str, None]:
+            async with client.stream(
+                "GET", server.url.copy_with(path="/stream")
+            ) as response:
                 try:
                     async for line in response.aiter_lines():
                         yield line
