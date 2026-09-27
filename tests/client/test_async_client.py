@@ -122,9 +122,7 @@ async def test_double_cancellation_does_not_leak_stream_connection(server):
             assert response.status_code == 200
 
         response = await client.send(
-            client.build_request(
-                "GET", server.url.copy_with(path="/stream")
-            ),
+            client.build_request("GET", server.url.copy_with(path="/stream")),
             stream=True,
         )
         close_task = asyncio.create_task(response.aclose())
